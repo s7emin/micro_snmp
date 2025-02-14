@@ -87,6 +87,10 @@ def info(*msg):
     print("[INFO] ", *msg)
 
 
+def debug(*msg):
+    print("[DEBUG] ", *msg)
+
+
 def error(*msg):
     print("[ERROR] ", *msg)
 
@@ -95,8 +99,26 @@ class ProtocolError(Exception):
     """Raise when SNMP protocol error occurred"""
 
 
-# UDP server
 class UDPServer:
+    """
+    A simple UDP server class for handling asynchronous communication.
+    Attributes:
+        polltimeout (int): The timeout value for polling in seconds. Default is 1 second.
+        max_packet (int): The maximum size of the packet to be received. Default is 4096 bytes.
+    Methods:
+        __init__(polltimeout=1, max_packet=4096):
+            Initializes the UDP server with the given poll timeout and maximum packet size.
+        close():
+            Closes the UDP socket.
+        serve(cb, host, port):
+            Asynchronously serves the UDP server, calling the provided callback function
+            when data is received. Binds the server to the specified host and port.
+            Args:
+                cb (function): The callback function to handle received data.
+                host (str): The host address to bind the server to.
+                port (int): The port number to bind the server to.
+    """
+
     def __init__(self, polltimeout=1, max_packet=4096):
         self.polltimeout = polltimeout
         self.max_packet = max_packet
@@ -139,6 +161,21 @@ def _is_trap_request(result):
 
 
 def _validate_protocol(pdu_index, tag, result):
+    """
+    Validates the protocol based on the PDU (Protocol Data Unit) index and tag.
+
+    Args:
+        pdu_index (int): The index of the PDU to validate.
+        tag (int): The ASN.1 tag associated with the PDU.
+        result (object): The result object containing the PDU data.
+
+    Returns:
+        bool: True if the protocol is valid, False otherwise.
+
+    The function checks the validity of the protocol based on the PDU index and tag.
+    It handles both trap requests and other types of requests by comparing the PDU index
+    and tag against expected values defined by ASN.1 constants.
+    """
     """Validates the protocol and returns True if valid, or False otherwise."""
     if _is_trap_request(result):
         if (
@@ -166,6 +203,18 @@ def _validate_protocol(pdu_index, tag, result):
 
 
 def _read_byte(stream: io.StringIO):
+    """
+    Read a single byte from the given stream.
+
+    Args:
+        stream (io.StringIO): The input stream to read from.
+
+    Returns:
+        int: The ASCII value of the read byte.
+
+    Raises:
+        Exception: If no more bytes are available to read.
+    """
     """Read byte from stream"""
     read_byte = stream.read(1)
     if not read_byte:
@@ -174,6 +223,18 @@ def _read_byte(stream: io.StringIO):
 
 
 def _parse_asn1_length(stream: io.StringIO):
+    """
+    Parse the length of an ASN.1 encoded element from the given stream.
+
+    Args:
+        stream (io.StringIO): The input stream to read the ASN.1 length from.
+
+    Returns:
+        int: The parsed length of the ASN.1 element.
+
+    Raises:
+        Exception: If the data length is not within the range [1..4] for long lengths.
+    """
     """Parse ASN.1 length"""
     length = _read_byte(stream)
     # handle long length
@@ -186,6 +247,17 @@ def _parse_asn1_length(stream: io.StringIO):
 
 
 def _read_int_len(stream, length, signed=False):
+    """
+    Reads an integer of a specified length from a stream.
+
+    Args:
+        stream (io.BytesIO): The input stream to read from.
+        length (int): The number of bytes to read.
+        signed (bool, optional): Whether the integer is signed. Defaults to False.
+
+    Returns:
+        int: The integer value read from the stream.
+    """
     """Read int with length"""
     result = 0
     sign = None
@@ -200,17 +272,46 @@ def _read_int_len(stream, length, signed=False):
 
 
 def twos_complement(value, bits):
+    """
+    Calculate the two's complement of an integer.
+
+    Args:
+        value (int): The integer value to be converted.
+        bits (int): The number of bits representing the integer.
+
+    Returns:
+        int: The two's complement of the given integer.
+    """
     """Calculate two's complement"""
     mask = 2 ** (bits - 1)
     return -(value & mask) + (value & ~mask)
 
 
 def is_printable(char):
+    """
+    Check if a character is printable.
+
+    Args:
+        char (str): A single character to check.
+
+    Returns:
+        bool: True if the character is printable (ASCII 32-126), False otherwise.
+    """
     """Returns True if the character is printable (ASCII 32-126)."""
     return 32 <= ord(char) <= 126
 
 
 def _parse_asn1_octet_string(stream):
+    """
+    Parse an ASN.1 octet string from the given stream.
+
+    Args:
+        stream (io.BytesIO): The input stream to read the octet string from.
+
+    Returns:
+        str: The parsed octet string. If any character in the string is not printable,
+             the string is converted to a space-separated hexadecimal representation.
+    """
     """Parse ASN.1 octet string"""
     length = _parse_asn1_length(stream)
     value = stream.read(length)
@@ -221,6 +322,19 @@ def _parse_asn1_octet_string(stream):
 
 
 def bytes_to_oid(data):
+    """
+    Convert a sequence of bytes to an OID (Object Identifier) string.
+
+    Args:
+        data (bytes): A sequence of bytes representing the OID.
+
+    Returns:
+        str: The OID string in dot-separated format.
+
+    Example:
+        >>> bytes_to_oid(b'\x2b\x06\x01\x02\x01')
+        '1.3.6.1.2.1'
+    """
     """Convert bytes to OID str"""
     values = [ord(x) for x in data]
     first_val = values.pop(0)
@@ -245,6 +359,18 @@ def bytes_to_oid(data):
 
 
 def timeticks_to_str(ticks):
+    """
+    Convert time ticks to a formatted string.
+
+    This function takes an integer representing time ticks and converts it into a 
+    human-readable string format of "days, hours, minutes, seconds and milliseconds".
+
+    Args:
+        ticks (int): The number of time ticks to convert.
+
+    Returns:
+        str: A string representing the time in "days, hours, minutes, seconds and milliseconds" format.
+    """
     """Return "days, hours, minutes, seconds and ms" string from ticks"""
     days, rem1 = divmod(ticks, 24 * 60 * 60 * 100)
     hours, rem2 = divmod(rem1, 60 * 60 * 100)
@@ -256,47 +382,119 @@ def timeticks_to_str(ticks):
 
 
 def int_to_ip(value):
+    """
+    Convert an integer to an IP address string.
+
+    Args:
+        value (int): The integer representation of the IP address.
+
+    Returns:
+        str: The IP address in dotted-decimal notation.
+    """
     """Int to IP"""
     return usocket.inet_ntoa(struct.pack("!I", value))
 
 
 def _parse_asn1_opaque_float(stream):
+    """
+    Parse an ASN.1 encoded opaque float from the given stream.
+
+    Args:
+        stream (io.BytesIO): The input stream containing the ASN.1 encoded data.
+
+    Returns:
+        tuple: A tuple containing the string 'FLOAT' and the parsed float value rounded to 5 decimal places.
+
+    Raises:
+        ValueError: If the length of the ASN.1 encoded data is invalid or if the float conversion fails.
+    """
     """Parse ASN.1 opaque float"""
     length = _parse_asn1_length(stream)
     value = _read_int_len(stream, length, signed=True)
     # convert int to float
     float_value = struct.unpack('>f', struct.pack('>l', value))[0]
-    info('ASN1_OPAQUE_FLOAT: %s', round(float_value, 5))
+    debug('ASN1_OPAQUE_FLOAT: %s', round(float_value, 5))
     return 'FLOAT', round(float_value, 5)
 
 
 def _parse_asn1_opaque_double(stream):
+    """
+    Parse an ASN.1 encoded opaque double from the given stream.
+
+    Args:
+        stream (io.BytesIO): The input stream containing the ASN.1 encoded data.
+
+    Returns:
+        tuple: A tuple containing the string 'DOUBLE' and the parsed double value rounded to 5 decimal places.
+
+    Raises:
+        ValueError: If the length of the ASN.1 encoded data is invalid or if the data cannot be unpacked as a double.
+    """
     """Parse ASN.1 opaque double"""
     length = _parse_asn1_length(stream)
     value = _read_int_len(stream, length, signed=True)
     # convert long long to double
     double_value = struct.unpack('>d', struct.pack('>q', value))[0]
-    info('ASN1_OPAQUE_DOUBLE: %s', round(double_value, 5))
+    debug('ASN1_OPAQUE_DOUBLE: %s', round(double_value, 5))
     return 'DOUBLE', round(double_value, 5)
 
 
 def _parse_asn1_opaque_int64(stream):
+    """
+    Parse an ASN.1 opaque int64 value from the given stream.
+
+    Args:
+        stream (io.BytesIO): The input stream to read the ASN.1 encoded data from.
+
+    Returns:
+        tuple: A tuple containing the string 'INT64' and the parsed int64 value.
+
+    Raises:
+        ValueError: If the length of the data is invalid or if the data cannot be parsed as an int64.
+    """
     """Parse ASN.1 opaque int64"""
     length = _parse_asn1_length(stream)
     value = _read_int_len(stream, length, signed=True)
-    info('ASN1_OPAQUE_INT64: %s', value)
+    debug('ASN1_OPAQUE_INT64: %s', value)
     return 'INT64', value
 
 
 def _parse_asn1_opaque_uint64(stream):
+    """
+    Parse an ASN.1 opaque uint64 value from the given stream.
+
+    Args:
+        stream (bytes): The byte stream to parse the uint64 value from.
+
+    Returns:
+        tuple: A tuple containing the string 'UINT64' and the parsed uint64 value.
+
+    Raises:
+        ValueError: If the length of the stream is invalid or if the stream cannot be parsed as an integer.
+    """
     """Parse ASN.1 opaque uint64"""
     length = _parse_asn1_length(stream)
     value = _read_int_len(stream, length)
-    info('ASN1_OPAQUE_UINT64: %s', value)
+    debug('ASN1_OPAQUE_UINT64: %s', value)
     return 'UINT64', value
 
 
 def _parse_asn1_opaque(stream):
+    """
+    Parse ASN.1 opaque data from the given stream.
+
+    This function reads the length, tag, and type of the ASN.1 opaque data
+    and delegates the parsing to the appropriate function based on the type.
+    If the type is not recognized, it rewinds the stream by 2 bytes and reads
+    the opaque data as a simple byte sequence.
+
+    Args:
+        stream (io.BytesIO): The input stream containing the ASN.1 opaque data.
+
+    Returns:
+        The parsed ASN.1 opaque data, which can be a float, double, int64, uint64,
+        or a simple byte sequence.
+    """
     """Parse ASN.1 opaque"""
     length = _parse_asn1_length(stream)
     opaque_tag = _read_byte(stream)
@@ -323,11 +521,32 @@ def _parse_asn1_opaque(stream):
 
 
 def write_tv(tag, value):
+    """
+    Write a Tag-Value (TV) pair and calculate the length from the value.
+
+    Args:
+        tag (int): The tag identifier.
+        value (bytes): The value associated with the tag.
+
+    Returns:
+        bytes: The encoded Tag-Length-Value (TLV) data.
+    """
     """Write TV (Tag-Value) and calculate length from value"""
     return write_tlv(tag, len(value), value)
 
 
 def _write_int(value, strip_leading_zeros=True):
+    """
+    Write an integer to a byte representation while ensuring correct sign representation.
+    Args:
+        value (int): The integer value to be converted to bytes. Must be in the range [0..18446744073709551615].
+        strip_leading_zeros (bool): If True, leading zeros will be stripped from the byte representation unless it 
+                                    causes misinterpretation of the sign. Defaults to True.
+    Returns:
+        bytes: The byte representation of the integer.
+    Raises:
+        Exception: If the integer value is outside the allowed range or if the minimum signed integer value is exceeded.
+    """
     """Write int while ensuring correct sign representation."""
     if abs(value) > 0xffffffffffffffff:
         raise Exception('Int value must be in [0..18446744073709551615]')
@@ -378,6 +597,22 @@ def _write_int(value, strip_leading_zeros=True):
 
 
 def _write_asn1_length(length):
+    """
+    Write ASN.1 length.
+
+    This function encodes the length of an ASN.1 element according to the 
+    Basic Encoding Rules (BER). If the length is greater than 127 (0x7f), 
+    it uses a multi-byte length encoding.
+
+    Args:
+        length (int): The length to encode.
+
+    Returns:
+        bytes: The encoded length as a byte string.
+
+    Raises:
+        Exception: If the length is too big to encode (greater than 0xffffffff).
+    """
     """Write ASN.1 length"""
     if length > 0x7f:
         if length <= 0xff:
@@ -395,11 +630,37 @@ def _write_asn1_length(length):
 
 
 def write_tlv(tag, length, value):
+    """
+    Write TLV (Tag-Length-Value)
+
+    Args:
+        tag (int): The tag value representing the type of the data.
+        length (int): The length of the value.
+        value (bytes): The actual value in bytes.
+
+    Returns:
+        bytes: The encoded TLV as a byte string.
+    """
     """Write TLV (Tag-Length-Value)"""
     return struct.pack('B', tag) + _write_asn1_length(length) + value
 
 
 def encode_to_7bit(value):
+    """
+    Encodes an integer value to a list of bytes using 7-bit encoding.
+
+    This function takes an integer value and encodes it into a list of bytes,
+    where each byte contains 7 bits of the original value. If the value is
+    greater than 0x7f (127), it will be split into multiple bytes, with each
+    byte containing 7 bits of the value and the most significant bit (MSB) set
+    to 1, except for the last byte which has the MSB set to 0.
+
+    Args:
+        value (int): The integer value to encode.
+
+    Returns:
+        list: A list of bytes representing the 7-bit encoded value.
+    """
     """Encode to 7 bit"""
     if value > 0x7f:
         res = []
@@ -412,6 +673,21 @@ def encode_to_7bit(value):
 
 
 def oid_to_bytes_list(oid):
+    """
+    Convert an OID string to a list of bytes.
+
+    This function takes an Object Identifier (OID) string, converts it to a list of integers,
+    and then encodes these integers into a list of bytes according to the ASN.1 BER encoding rules.
+
+    Parameters:
+    oid (str): The OID string to be converted. The OID string can start with 'iso' or a number.
+
+    Returns:
+    list: A list of integers representing the encoded OID in bytes.
+
+    Raises:
+    Exception: If the OID string cannot be parsed into integers.
+    """
     """Convert OID str to bytes list"""
     if oid.startswith('iso'):
         oid = oid.replace('iso', '1')
@@ -427,11 +703,37 @@ def oid_to_bytes_list(oid):
 
 
 def oid_to_bytes(oid):
+    """
+    Convert an Object Identifier (OID) string to a byte string.
+
+    Args:
+        oid (str): The OID string to be converted.
+
+    Returns:
+        str: The byte string representation of the OID.
+    """
     """Convert OID str to bytes"""
     return ''.join([chr(x) for x in oid_to_bytes_list(oid)])
 
 
 def handle_get_request(oids, oid):
+    """
+    Handle GetRequest PDU.
+
+    This function processes a GetRequest PDU by checking if the requested OID
+    is present in the provided OIDs dictionary. It returns the appropriate
+    error status, error index, and the value associated with the OID.
+
+    Args:
+        oids (dict): A dictionary containing OID-value pairs.
+        oid (str): The OID to be retrieved.
+
+    Returns:
+        tuple: A tuple containing:
+            - error_status (int): The error status code.
+            - error_index (int): The index of the error.
+            - oid_value (bytes): The value associated with the OID or an error indication.
+    """
     """Handle GetRequest PDU"""
     error_status = ASN1_ERROR_STATUS_NO_ERROR
     error_index = 0
@@ -451,6 +753,20 @@ def handle_get_request(oids, oid):
 
 
 def oid_cmp(oid1: str, oid2: str):
+    """
+    Compare two Object Identifiers (OIDs) in string format.
+
+    This function compares two OIDs by converting them into lists of integers
+    and then performing a lexicographical comparison.
+
+    Args:
+        oid1 (str): The first OID to compare, in string format.
+        oid2 (str): The second OID to compare, in string format.
+
+    Returns:
+        int: -1 if oid1 is less than oid2, 1 if oid1 is greater than oid2, 
+             and 0 if they are equal.
+    """
     """OIDs comparator function"""
     oid1_t = [int(x) for x in oid1.replace('iso', '1').strip('.').split('.')]
     oid2_t = [int(x) for x in oid2.replace('iso', '1').strip('.').split('.')]
@@ -462,10 +778,36 @@ def oid_cmp(oid1: str, oid2: str):
 
 
 def oid_key(oid: str):
+    """
+    Convert an OID string to a list of integers.
+
+    This function takes an OID (Object Identifier) string, replaces the 'iso' prefix with '1',
+    removes any leading or trailing dots, splits the string by dots, and converts each segment
+    to an integer.
+
+    Args:
+        oid (str): The OID string to be converted.
+
+    Returns:
+        list: A list of integers representing the OID.
+    """
     return [int(x) for x in oid.replace('iso', '1').strip('.').split('.')]
 
 
-def get_next(oids, oid):
+def get_next(oids: dict[str, object], oid: str):
+    """
+    Get the next OID from the list of OIDs.
+
+    This function takes a list of OIDs and a specific OID, and returns the next OID in the list that is greater than the given OID. 
+    If the given OID is empty, it returns the first OID in the sorted list.
+
+    Args:
+        oids (list): A list of OIDs.
+        oid (str): The OID to compare against.
+
+    Returns:
+        str: The next OID in the list that is greater than the given OID, or an empty string if no such OID exists.
+    """
     """Get next OID from the OIDs list"""
     for val in sorted(oids, key=oid_key):
         # return first if compared with empty oid
@@ -478,7 +820,19 @@ def get_next(oids, oid):
     return ''
 
 
-def get_next_oid(oid):
+def get_next_oid(oid: str):
+    """
+    Get the next OID parent's node.
+
+    This function takes an OID (Object Identifier) string as input and returns the next OID in sequence by incrementing the 
+    second-to-last node and resetting the last node to '1'. If the OID has only one node, it simply increments that node.
+
+    Args:
+        oid (str): The OID string to be incremented.
+
+    Returns:
+        str: The next OID in sequence.
+    """
     """Get the next OID parent's node"""
     # increment pre last node, e.g.: "1.3.6.1.1" -> "1.3.6.2.1"
     oid_vals = oid.rsplit('.', 2)
@@ -491,7 +845,26 @@ def get_next_oid(oid):
     return oid_next
 
 
-def handle_get_next_request(oids, oid, limit_to_last_in_config=True):
+def handle_get_next_request(oids: dict[str, object], oid: str, limit_to_last_in_config=True):
+    """
+    Handle a GetNextRequest for SNMP.
+    This function processes a GetNextRequest by finding the next OID in the 
+    provided list of OIDs. If the OID is found, it retrieves the next OID 
+    and its value. If the OID is not found, it returns a null value. The 
+    function also ensures that the OID does not exceed the last OID in the 
+    configuration if the limit_to_last_in_config flag is set.
+    Args:
+        oids (dict): A dictionary of OIDs and their corresponding values.
+        oid (str): The OID to process.
+        limit_to_last_in_config (bool, optional): Flag to limit the OID to the 
+            last one in the configuration. Defaults to True.
+    Returns:
+        tuple: A tuple containing:
+            - error_status (int): The error status code.
+            - error_index (int): The error index.
+            - final_oid (str): The final OID after processing.
+            - oid_value (bytes): The value of the OID.
+    """
     """Handle GetNextRequest"""
     error_status = ASN1_ERROR_STATUS_NO_ERROR
     error_index = 0
@@ -520,43 +893,100 @@ def handle_get_next_request(oids, oid, limit_to_last_in_config=True):
     return error_status, error_index, final_oid, oid_value
 
 
-def boolean(value):
+def boolean(value: bool):
+    """
+    Convert a boolean value to its ASN.1 encoded representation.
+
+    Args:
+        value (bool): The boolean value to encode.
+
+    Returns:
+        bytes: The ASN.1 encoded representation of the boolean value.
+    """
     """Get Boolean"""
     return write_tlv(ASN1_BOOLEAN, 1, b'\xff' if value else b'\x00')
 
 
-def integer(value):
+def integer(value: int):
+    """
+    Encodes an integer value in ASN.1 format.
+
+    Args:
+        value (int): The integer value to be encoded.
+
+    Returns:
+        bytes: The encoded integer in ASN.1 format.
+    """
     return write_tv(ASN1_INTEGER, _write_int(value, False))
 
 
-def bit_string(value):
-    """
-    Get BitString
-    For example, if the input value is '\xF0\xF0'
-    F0 F0 in hex = 11110000 11110000 in binary
-    And in binary bits 0, 1, 2, 3, 8, 9, 10, 11 are set, so these bits are added to the output
-    Therefore the SNMP response is: F0 F0 0 1 2 3 8 9 10 11
-    """
+def bit_string(value: str):
+    '''
+    Convert a string value to a BitString for SNMP response.
+    Args:
+        value (str): The input string value to be converted. For example, '\xF0\xF0'.
+    Returns:
+        bytes: The encoded BitString in TLV (Type-Length-Value) format.
+    Example:
+        If the input value is '\xF0\xF0', the binary representation is:
+        F0 F0 in hex = 11110000 11110000 in binary.
+        The bits 0, 1, 2, 3, 8, 9, 10, 11 are set, so these bits are added to the output.
+        Therefore, the SNMP response is: F0 F0 0 1 2 3 8 9 10 11.
+    '''
+
     return write_tlv(ASN1_BIT_STRING, len(value), value.encode('latin'))
 
 
-def octet_string(value):
+def octet_string(value: str):
+    """
+    Convert a given string to an ASN.1 OctetString.
+
+    Args:
+        value (str): The string to be converted.
+
+    Returns:
+        bytes: The encoded OctetString in bytes.
+    """
     """Get OctetString"""
     return write_tv(ASN1_OCTET_STRING, value.encode('latin'))
 
 
 def null():
+    """
+    Get a Null ASN.1 type.
+
+    Returns:
+        bytes: The encoded ASN.1 NULL type.
+    """
     """Get Null"""
     return write_tv(ASN1_NULL, b'')
 
 
-def object_identifier(value):
+def object_identifier(value: str):
+    """
+    Convert an OID value to its byte representation and encode it as an ASN.1 OBJECT IDENTIFIER.
+
+    Args:
+        value (str): The OID value to be converted.
+
+    Returns:
+        bytes: The encoded ASN.1 OBJECT IDENTIFIER.
+    """
     """Get OID"""
     value = oid_to_bytes(value)
     return write_tv(ASN1_OBJECT_IDENTIFIER, value.encode('latin'))
 
 
-def real(value):
+def real(value: float):
+    """
+    Encodes a floating-point number into an ASN.1 opaque type.
+
+    Args:
+        value (float): The floating-point number to encode.
+
+    Returns:
+        bytes: The ASN.1 encoded opaque type containing the floating-point number.
+    """
     """Get real"""
     # opaque tag | len | tag1 | tag2 | len | data
     float_value = struct.pack('>f', value)
@@ -566,7 +996,16 @@ def real(value):
     return write_tv(ASN1_OPAQUE, opaque_type_value)
 
 
-def double(value):
+def double(value: float):
+    """
+    Encodes a double precision floating point number into an ASN.1 opaque type.
+
+    Args:
+        value (float): The double precision floating point number to encode.
+
+    Returns:
+        bytes: The encoded ASN.1 opaque type containing the double precision floating point number.
+    """
     """Get double"""
     # opaque tag | len | tag1 | tag2 | len | data
     double_value = struct.pack('>d', value)
@@ -576,7 +1015,16 @@ def double(value):
     return write_tv(ASN1_OPAQUE, opaque_type_value)
 
 
-def int64(value):
+def int64(value: int):
+    """
+    Encodes a given integer value as an ASN.1 opaque int64.
+
+    Args:
+        value (int): The integer value to be encoded.
+
+    Returns:
+        bytes: The encoded ASN.1 opaque int64 value.
+    """
     """Get int64"""
     # opaque tag | len | tag1 | tag2 | len | data
     int64_value = struct.pack('>q', value)
@@ -586,7 +1034,16 @@ def int64(value):
     return write_tv(ASN1_OPAQUE, opaque_type_value)
 
 
-def uint64(value):
+def uint64(value: int):
+    """
+    Encodes a given integer value as a uint64 in ASN.1 format.
+
+    Args:
+        value (int): The integer value to be encoded.
+
+    Returns:
+        bytes: The encoded uint64 value in ASN.1 format.
+    """
     """Get uint64"""
     # opaque tag | len | tag1 | tag2 | len | data
     uint64_value = struct.pack('>Q', value)
@@ -596,53 +1053,150 @@ def uint64(value):
     return write_tv(ASN1_OPAQUE, opaque_type_value)
 
 
-def utf8_string(value):
+def utf8_string(value: str):
+    """
+    Convert a given string to a UTF-8 encoded ASN.1 string.
+
+    Args:
+        value (str): The string to be encoded.
+
+    Returns:
+        bytes: The encoded string in UTF-8 format with ASN.1 type identifier.
+    """
     """Get UTF8String"""
     return write_tv(ASN1_UTF8_STRING, value.encode('latin'))
 
 
-def printable_string(value):
+def printable_string(value: str):
+    """
+    Convert a given string to an ASN.1 PrintableString.
+
+    Args:
+        value (str): The string to be converted.
+
+    Returns:
+        bytes: The encoded ASN.1 PrintableString.
+    """
     """Get PrintableString"""
     return write_tv(ASN1_PRINTABLE_STRING, value.encode('latin'))
 
 
-def ia5_string(value):
+def ia5_string(value: str):
+    """
+    Convert a given string to an IA5String encoded in ASN.1 format.
+
+    Args:
+        value (str): The string to be encoded.
+
+    Returns:
+        bytes: The IA5String encoded in ASN.1 format.
+    """
     """Get IA5String"""
     return write_tv(ASN1_IA5_STRING, value.encode('latin'))
 
 
-def bmp_string(value):
+def bmp_string(value: str):
+    """
+    Convert a given string to a BMPString encoded in UTF-16-BE and return its ASN.1 representation.
+
+    Args:
+        value (str): The string to be converted to BMPString.
+
+    Returns:
+        bytes: The ASN.1 encoded BMPString.
+    """
     """Get BMPString"""
     return write_tv(ASN1_BMP_STRING, value.encode('utf-16-be'))
 
 
 def ip_address(value):
+    """
+    Convert an IP address string to its binary representation and write it with ASN.1 IPAddress type.
+
+    Args:
+        value (str): The IP address in string format (e.g., '192.168.1.1').
+
+    Returns:
+        bytes: The binary representation of the IP address with ASN.1 IPAddress type.
+    """
     """Get IPAddress"""
     return write_tv(ASN1_IPADDRESS, usocket.inet_aton(value))
 
 
-def timeticks(value):
+def timeticks(value: int):
+    """
+    Convert an integer value to SNMP Timeticks format.
+
+    Timeticks is a non-negative integer that represents the time in hundredths of a second since some epoch.
+
+    Args:
+        value (int): The integer value to be converted. Must be in the range [0..4294967295].
+
+    Returns:
+        bytes: The encoded Timeticks value in ASN.1 format.
+
+    Raises:
+        Exception: If the value is not in the range [0..4294967295].
+    """
     """Get Timeticks"""
     if value > 0xffffffff:
         raise Exception('Timeticks value must be in [0..4294967295]')
     return write_tv(ASN1_TIMETICKS, _write_int(value))
 
 
-def gauge32(value):
+def gauge32(value: int):
+    """
+    Convert an integer value to a Gauge32 type for SNMP.
+
+    A Gauge32 is an unsigned 32-bit integer that can range from 0 to 4294967295.
+
+    Args:
+        value (int): The integer value to be converted. Must be in the range [0..4294967295].
+
+    Returns:
+        bytes: The encoded Gauge32 value in ASN.1 format.
+
+    Raises:
+        Exception: If the value is outside the allowable range.
+    """
     """Get Gauge32"""
     if value > 0xffffffff:
         raise Exception('Gauge32 value must be in [0..4294967295]')
     return write_tv(ASN1_GAUGE32, _write_int(value, strip_leading_zeros=False))
 
 
-def counter32(value):
+def counter32(value: int):
+    """
+    Get Counter32
+
+    Args:
+        value (int): The value to be converted to Counter32. Must be in the range [0..4294967295].
+
+    Returns:
+        bytes: The encoded Counter32 value.
+
+    Raises:
+        Exception: If the value is greater than 0xffffffff (4294967295).
+    """
     """Get Counter32"""
     if value > 0xffffffff:
         raise Exception('Counter32 value must be in [0..4294967295]')
     return write_tv(ASN1_COUNTER32, _write_int(value))
 
 
-def counter64(value):
+def counter64(value: int):
+    """
+    Get Counter64
+
+    Args:
+        value (int): The value to be converted to Counter64. Must be in the range [0..18446744073709551615].
+
+    Returns:
+        bytes: The encoded Counter64 value.
+
+    Raises:
+        Exception: If the value is greater than 18446744073709551615.
+    """
     """Get Counter64"""
     if value > 0xffffffffffffffff:
         raise Exception('Counter64 value must be in [0..18446744073709551615]')
@@ -650,6 +1204,20 @@ def counter64(value):
 
 
 def craft_response(version, community, request_id, error_status, error_index, oid_items):
+    """
+    Craft an SNMP response message.
+
+    Parameters:
+    version (int): SNMP version number.
+    community (str): Community string.
+    request_id (int): Request identifier.
+    error_status (int): Error status code.
+    error_index (int): Error index.
+    oid_items (list of tuples): List of OID items, where each item is a tuple containing an OID key (str) and an OID value (bytes).
+
+    Returns:
+    bytes: The crafted SNMP response message.
+    """
     """Craft SNMP response"""
     response = write_tv(
         ASN1_SEQUENCE,
@@ -684,6 +1252,21 @@ def craft_response(version, community, request_id, error_status, error_index, oi
 
 
 def callback(request_data: bytes, addr: bytes):
+    """
+    Handles SNMP requests and generates appropriate responses.
+    Args:
+        request_data (bytes): The raw SNMP request data.
+        addr (bytes): The address from which the request originated.
+    Returns:
+        bytes: The crafted SNMP response.
+    Raises:
+        Exception: If the parsed request length is invalid.
+    The function processes different types of SNMP Protocol Data Units (PDUs):
+    - GET_REQUEST_PDU: Retrieves the value of the requested OIDs.
+    - GET_NEXT_REQUEST_PDU: Retrieves the value of the next OID in the MIB.
+    - GET_BULK_REQUEST_PDU: Retrieves multiple values based on the requested OIDs and max repetitions.
+    The function uses helper functions to handle specific PDU types and to craft the response.
+    """
     request_result = _parse_snmp_asn1(request_data, addr)
 
     version = request_result[0][1]
@@ -750,6 +1333,21 @@ OIDS = {
 
 
 def _parse_snmp_asn1(request_data: bytes, addr: bytes) -> list:
+    """
+    Parses SNMP ASN.1 encoded request data.
+    Args:
+        request_data (bytes): The SNMP request data in bytes.
+        addr (bytes): The address from which the request was received.
+    Returns:
+        list: A list of tuples representing the parsed SNMP data.
+    Raises:
+        ProtocolError: If the SNMP protocol data units are not read correctly or if an invalid tag is encountered.
+        Exception: If unsupported PDU types are encountered or if certain PDU types are used in unsupported SNMP versions.
+    The function decodes the request data, reads through the stream byte by byte, and parses various ASN.1 tags such as 
+    INTEGER, OCTET STRING, OBJECT IDENTIFIER, and different PDU types. It validates the protocol and appends the parsed 
+    values to the result list. The function also handles specific SNMP versions and raises exceptions for unsupported 
+    PDUs or invalid protocol data.
+    """
     info("Received :", len(request_data), " bytes.")
     result = []
     wait_oid_value: bool = False
