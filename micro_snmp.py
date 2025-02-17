@@ -3,6 +3,7 @@ import usocket
 import uasyncio
 import uio as io
 import struct
+import utime
 
 
 # ASN.1 tags
@@ -1129,7 +1130,7 @@ def ip_address(value):
     return write_tv(ASN1_IPADDRESS, usocket.inet_aton(value))
 
 
-def timeticks(value: int):
+def timeticks(value: int) -> bytes:
     """
     Convert an integer value to SNMP Timeticks format.
 
@@ -1276,9 +1277,13 @@ def callback(request_data: bytes, addr: bytes):
     request_result = _parse_snmp_asn1(request_data, addr)
 
     version = request_result[0][1]
+    debug('Version:', SNMP_VERSIONS.get(int(version)))
     community = request_result[1][1]
+    debug('Community:', community)
     pdu_type = request_result[2][1]
+    debug('PDU type:', pdu_type)
     request_id = request_result[3][1]
+    debug('Request ID:', request_id)
 
     info("Version:", version, ", Community:", community,
          ", PDU type:", pdu_type, ", Request ID:", request_id)
@@ -1520,6 +1525,22 @@ def _parse_snmp_asn1(request_data: bytes, addr: bytes) -> list:
         info("PDU index:", pdu_index)
 
 
+def get_time(oid):
+    return timeticks(utime.ticks_ms())
+
+
 if __name__ == '__main__':
+
+    OIDS.update(
+        {
+            '1.3.6.1.2.1.1.1.0': octet_string('Micropython SNMP Agent'),
+            '1.3.6.1.2.1.1.2.0': object_identifier('1.3.6.1.4.1.8072.3.2.10'),
+            '1.3.6.1.2.1.1.3.0': get_time,
+            '1.3.6.1.2.1.1.4.0': octet_string('admin@example.com'),
+            '1.3.6.1.2.1.1.5.0': octet_string('My SNMP Agent'),
+            '1.3.6.1.2.1.1.6.0': octet_string('Server Room'),
+            '1.3.6.1.2.1.1.7.0': integer(72),
+        })
+
     udp_server = UDPServer()
     uasyncio.run(udp_server.serve(callback, "0.0.0.0", 188))
