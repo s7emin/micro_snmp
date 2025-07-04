@@ -102,6 +102,13 @@ def error(*msg):
     print("[ERROR] ", *msg)
 
 
+# Define CancelledError for older MicroPython versions
+class CancelledError(Exception):
+    pass
+
+if not hasattr(uasyncio, 'CancelledError'):
+    uasyncio.CancelledError = CancelledError
+
 class ProtocolError(Exception):
     """Raise when SNMP protocol error occurred"""
 
@@ -179,8 +186,8 @@ def _validate_protocol(pdu_index, tag, result):
     Returns:
         bool: True if the protocol is valid, False otherwise.
 
-    The function checks the validity of the protocol based on the PDU index and tag.
-    It handles both trap requests and other types of requests by comparing the PDU index
+    The function checks the validity of the protocol based on the PDU index
+    and tag. It handles both trap requests and other types of requests by comparing the PDU index
     and tag against expected values defined by ASN.1 constants.
     """
     """Validates the protocol and returns True if valid, or False otherwise."""
@@ -209,7 +216,7 @@ def _validate_protocol(pdu_index, tag, result):
     return True
 
 
-def _read_byte(stream: io.StringIO):
+def _read_byte(stream):
     """
     Read a single byte from the given stream.
 
@@ -229,7 +236,7 @@ def _read_byte(stream: io.StringIO):
     return ord(read_byte)
 
 
-def _parse_asn1_length(stream: io.StringIO):
+def _parse_asn1_length(stream):
     """
     Parse the length of an ASN.1 encoded element from the given stream.
 
@@ -543,18 +550,8 @@ def write_tv(tag, value):
 
 
 def _write_int(value, strip_leading_zeros=True):
-    """
-    Write an integer to a byte representation while ensuring correct sign representation.
-    Args:
-        value (int): The integer value to be converted to bytes. Must be in the range [0..18446744073709551615].
-        strip_leading_zeros (bool): If True, leading zeros will be stripped from the byte representation unless it 
-                                    causes misinterpretation of the sign. Defaults to True.
-    Returns:
-        bytes: The byte representation of the integer.
-    Raises:
-        Exception: If the integer value is outside the allowed range or if the minimum signed integer value is exceeded.
-    """
     """Write int while ensuring correct sign representation."""
+    debug('Writing int value:', value, 'strip_leading_zeros:', strip_leading_zeros)
     if abs(value) > 0xffffffffffffffff:
         raise Exception('Int value must be in [0..18446744073709551615]')
 
@@ -571,36 +568,22 @@ def _write_int(value, strip_leading_zeros=True):
         else:
             raise Exception('Min signed int value')
     else:
-        if not strip_leading_zeros:
-            # Always pack as the largest size to simplify leading zero handling.
-            if value <= 0x7fffffff:
-                result = struct.pack('>I', value)
-            else:
-                result = struct.pack('>Q', value)
+        # For request_id and other SNMP integers, we want to preserve the exact size
+        if value <= 0xff:
+            result = struct.pack('>B', value)
+        elif value <= 0xffff:
+            result = struct.pack('>H', value)
+        elif value <= 0xffffffff:
+            result = struct.pack('>I', value)
         else:
-            # Always pack as the largest size to simplify leading zero handling.
             result = struct.pack('>Q', value)
-            # Check if the first relevant byte (ignoring leading zeros for now) would be misinterpreted as negative.
-            if (result[0] == 0x00 and (result[1] & 0x80) != 0):
-                # If not stripping leading zeros, or if stripping them would cause a misinterpretation,
-                # leave the result as is. This branch might need revisiting based on specific needs.
-                pass
-            else:
-                # Here's the core of the adjustment: only strip leading zeros if it does not lead to misinterpretation.
-                # This means checking if the first byte would make it look negative and adjusting accordingly.
-                first_non_zero_byte = len(result) - 1
-                for i, byte in enumerate(result):
-                    if byte != 0:
-                        first_non_zero_byte = i
-                        break
-                if result[first_non_zero_byte] & 0x80:
-                    # If the first non-zero byte's MSB is set, prepend a 0x00 to keep it positive.
-                    result = b'\x00' + result[first_non_zero_byte:]
-                else:
-                    # Otherwise, strip all leading zeros except the last one, if all are zeros.
-                    result = result[first_non_zero_byte:]
 
-    return result or b'\x00'
+        # If the highest bit is set, prepend a zero byte to ensure it's interpreted as positive
+        if result[0] & 0x80:
+            result = b'\x00' + result
+
+    debug('Int encoded as:', ' '.join(['%02x' % b for b in result]))
+    return result
 
 
 def _write_asn1_length(length):
@@ -759,7 +742,7 @@ def handle_get_request(oids, oid):
     return error_status, error_index, oid_value
 
 
-def oid_cmp(oid1: str, oid2: str):
+def oid_cmp(oid1, oid2):
     """
     Compare two Object Identifiers (OIDs) in string format.
 
@@ -784,7 +767,7 @@ def oid_cmp(oid1: str, oid2: str):
     return 0
 
 
-def oid_key(oid: str):
+def oid_key(oid):
     """
     Convert an OID string to a list of integers.
 
@@ -801,7 +784,7 @@ def oid_key(oid: str):
     return [int(x) for x in oid.replace('iso', '1').strip('.').split('.')]
 
 
-def get_next(oids: dict[str, object], oid: str):
+def get_next(oids, oid):
     """
     Get the next OID from the list of OIDs.
 
@@ -827,7 +810,7 @@ def get_next(oids: dict[str, object], oid: str):
     return ''
 
 
-def get_next_oid(oid: str):
+def get_next_oid(oid):
     """
     Get the next OID parent's node.
 
@@ -852,7 +835,7 @@ def get_next_oid(oid: str):
     return oid_next
 
 
-def handle_get_next_request(oids: dict[str, object], oid: str, limit_to_last_in_config=True):
+def handle_get_next_request(oids, oid, limit_to_last_in_config=True):
     """
     Handle a GetNextRequest for SNMP.
     This function processes a GetNextRequest by finding the next OID in the 
@@ -875,32 +858,37 @@ def handle_get_next_request(oids: dict[str, object], oid: str, limit_to_last_in_
     """Handle GetNextRequest"""
     error_status = ASN1_ERROR_STATUS_NO_ERROR
     error_index = 0
+    new_oid = None
+    
     if oid in oids:
         new_oid = get_next(oids, oid)
         if not new_oid:
             oid_value = struct.pack('BB', ASN1_END_OF_MIB_VIEW, 0)
         else:
             oid_value = oids.get(new_oid)
-
     else:
         oid_value = null()
+        new_oid = get_next(oids, oid)  # Try to get next OID even if current not found
+    
     # if new oid is found - get it, otherwise calculate possible next one
     if new_oid:
         oid = new_oid
     else:
         oid = get_next_oid(oid.rstrip('.0')) + '.0'
+    
     # if wildcards are used in oid - replace them
     final_oid = oid
+    
     # to prevent loop - check a new oid and if it is more than the last in config - stop
     if oids and limit_to_last_in_config:
-        last_oid_in_config = sorted(
-            oids, key=oid_key)[-1]
+        last_oid_in_config = sorted(oids, key=oid_key)[-1]
         if oid_cmp(final_oid, last_oid_in_config) > 0:
             oid_value = struct.pack('BB', ASN1_END_OF_MIB_VIEW, 0)
+    
     return error_status, error_index, final_oid, oid_value
 
 
-def boolean(value: bool):
+def boolean(value):
     """
     Convert a boolean value to its ASN.1 encoded representation.
 
@@ -914,7 +902,7 @@ def boolean(value: bool):
     return write_tlv(ASN1_BOOLEAN, 1, b'\xff' if value else b'\x00')
 
 
-def integer(value: int):
+def integer(value):
     """
     Encodes an integer value in ASN.1 format.
 
@@ -927,7 +915,7 @@ def integer(value: int):
     return write_tv(ASN1_INTEGER, _write_int(value, False))
 
 
-def bit_string(value: str):
+def bit_string(value):
     '''
     Convert a string value to a BitString for SNMP response.
     Args:
@@ -944,7 +932,7 @@ def bit_string(value: str):
     return write_tlv(ASN1_BIT_STRING, len(value), value.encode('latin'))
 
 
-def octet_string(value: str):
+def octet_string(value):
     """
     Convert a given string to an ASN.1 OctetString.
 
@@ -969,7 +957,7 @@ def null():
     return write_tv(ASN1_NULL, b'')
 
 
-def object_identifier(value: str):
+def object_identifier(value):
     """
     Convert an OID value to its byte representation and encode it as an ASN.1 OBJECT IDENTIFIER.
 
@@ -984,7 +972,7 @@ def object_identifier(value: str):
     return write_tv(ASN1_OBJECT_IDENTIFIER, value.encode('latin'))
 
 
-def real(value: float):
+def real(value):
     """
     Encodes a floating-point number into an ASN.1 opaque type.
 
@@ -1003,7 +991,7 @@ def real(value: float):
     return write_tv(ASN1_OPAQUE, opaque_type_value)
 
 
-def double(value: float):
+def double(value):
     """
     Encodes a double precision floating point number into an ASN.1 opaque type.
 
@@ -1022,7 +1010,7 @@ def double(value: float):
     return write_tv(ASN1_OPAQUE, opaque_type_value)
 
 
-def int64(value: int):
+def int64(value):
     """
     Encodes a given integer value as an ASN.1 opaque int64.
 
@@ -1041,7 +1029,7 @@ def int64(value: int):
     return write_tv(ASN1_OPAQUE, opaque_type_value)
 
 
-def uint64(value: int):
+def uint64(value):
     """
     Encodes a given integer value as a uint64 in ASN.1 format.
 
@@ -1060,7 +1048,7 @@ def uint64(value: int):
     return write_tv(ASN1_OPAQUE, opaque_type_value)
 
 
-def utf8_string(value: str):
+def utf8_string(value):
     """
     Convert a given string to a UTF-8 encoded ASN.1 string.
 
@@ -1074,7 +1062,7 @@ def utf8_string(value: str):
     return write_tv(ASN1_UTF8_STRING, value.encode('latin'))
 
 
-def printable_string(value: str):
+def printable_string(value):
     """
     Convert a given string to an ASN.1 PrintableString.
 
@@ -1088,7 +1076,7 @@ def printable_string(value: str):
     return write_tv(ASN1_PRINTABLE_STRING, value.encode('latin'))
 
 
-def ia5_string(value: str):
+def ia5_string(value):
     """
     Convert a given string to an IA5String encoded in ASN.1 format.
 
@@ -1102,7 +1090,7 @@ def ia5_string(value: str):
     return write_tv(ASN1_IA5_STRING, value.encode('latin'))
 
 
-def bmp_string(value: str):
+def bmp_string(value):
     """
     Convert a given string to a BMPString encoded in UTF-16-BE and return its ASN.1 representation.
 
@@ -1130,7 +1118,7 @@ def ip_address(value):
     return write_tv(ASN1_IPADDRESS, usocket.inet_aton(value))
 
 
-def timeticks(value: int) -> bytes:
+def timeticks(value):
     """
     Convert an integer value to SNMP Timeticks format.
 
@@ -1151,7 +1139,7 @@ def timeticks(value: int) -> bytes:
     return write_tv(ASN1_TIMETICKS, _write_int(value))
 
 
-def gauge32(value: int):
+def gauge32(value):
     """
     Convert an integer value to a Gauge32 type for SNMP.
 
@@ -1172,7 +1160,7 @@ def gauge32(value: int):
     return write_tv(ASN1_GAUGE32, _write_int(value, strip_leading_zeros=False))
 
 
-def counter32(value: int):
+def counter32(value):
     """
     Get Counter32
 
@@ -1191,7 +1179,7 @@ def counter32(value: int):
     return write_tv(ASN1_COUNTER32, _write_int(value))
 
 
-def counter64(value: int):
+def counter64(value):
     """
     Get Counter64
 
@@ -1226,6 +1214,7 @@ def craft_response(version, community, request_id, error_status, error_index, oi
     bytes: The crafted SNMP response message.
     """
     """Craft SNMP response"""
+    debug('Crafting response with request_id:', request_id)
     response = write_tv(
         ASN1_SEQUENCE,
         # add version and community from request
@@ -1255,10 +1244,11 @@ def craft_response(version, community, request_id, error_status, error_index, oi
             )
         )
     )
+    debug('Response crafted, length:', len(response))
     return response
 
 
-def callback(request_data: bytes, addr: bytes):
+def callback(request_data, addr):
     """
     Handles SNMP requests and generates appropriate responses.
     Args:
@@ -1343,7 +1333,7 @@ OIDS = {
 }
 
 
-def _parse_snmp_asn1(request_data: bytes, addr: bytes) -> list:
+def _parse_snmp_asn1(request_data, addr):
     """
     Parses SNMP ASN.1 encoded request data.
     Args:
@@ -1361,8 +1351,8 @@ def _parse_snmp_asn1(request_data: bytes, addr: bytes) -> list:
     """
     info("Received :", len(request_data), " bytes.")
     result = []
-    wait_oid_value: bool = False
-    pdu_index: int = 0
+    wait_oid_value = False
+    pdu_index = 0
 
     decoded = "".join(chr(b) for b in request_data)
     info("Decoded:", decoded)
@@ -1526,7 +1516,11 @@ def _parse_snmp_asn1(request_data: bytes, addr: bytes) -> list:
 
 
 def get_time(oid):
-    return timeticks(utime.ticks_ms())
+    """
+    Get system uptime in hundredths of a second (1/100 sec)
+    Converting from milliseconds (1/1000 sec) to centiseconds (1/100 sec)
+    """
+    return timeticks(utime.ticks_ms() // 10)  # Convert ms to 1/100 sec
 
 
 if __name__ == '__main__':
@@ -1543,4 +1537,6 @@ if __name__ == '__main__':
         })
 
     udp_server = UDPServer()
-    uasyncio.run(udp_server.serve(callback, "0.0.0.0", 188))
+    loop = uasyncio.get_event_loop()
+    loop.create_task(udp_server.serve(callback, "0.0.0.0", 161))
+    loop.run_forever()
